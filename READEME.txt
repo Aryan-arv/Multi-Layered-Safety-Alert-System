@@ -1,0 +1,258 @@
+Rakshak Safety Application
+
+Rakshak is a full-stack safety system consisting of three parts: a C# backend (RakshakAPI), a Python-based ML service, and a React.js frontend. It provides user registration/login, location tracking, and crime risk prediction. The backend is built with ASP.NET Core
+learn.microsoft.com
+ and uses Entity Framework Core with SQL Server for data. The ML service is a Flask microservice
+github.com
+ in Python that loads a trained model to compute a risk score based on location, time, gender, and age. The frontend is a React single-page app
+opensource.fb.com
+, using Leaflet maps
+leafletjs.com
+ for visualization. Together, these components integrate modern web frameworks and libraries (JWT authentication, REST APIs, ML model inference, interactive maps) to deliver a cohesive safety application.
+
+RakshakAPI (Backend)
+
+RakshakAPI is an ASP.NET Core web API
+learn.microsoft.com
+ (C#) that serves as the system’s server-side. It handles user data, authentication, and exposes REST endpoints for client interaction. Key functions include user registration/login (with JWT authentication), profile management, storing location logs, and crime reports. It also includes an endpoint to forward inputs to the ML service for risk prediction.
+Controllers:
+AuthController: handles /api/auth routes for user register and login, issues JWT tokens.
+UsersController: manages user profiles (GET/PUT user details).
+CrimeReportsController: CRUD operations for crime reports (CrimeReport records).
+LocationLogsController: CRUD for location log entries (LocationLog records).
+MLPredictionController: receives POST to /api/MLPrediction/predict, sends data to the Flask ML API (at http://127.0.0.1:5000/predict), and returns the result.
+WeatherForecastController: default example endpoint (can be removed).
+Data Layer: Uses ApplicationDbContext (EF Core) with DbSet<User>, DbSet<CrimeReport>, and DbSet<LocationLog>. The connection string (DefaultConnection) in appsettings.json points to a SQL Server database. Migrations are provided to create the required tables. The OnModelCreating override sets IncidentId as the primary key for CrimeReport.
+Models and DTOs:
+Models:
+User: properties include Id, Username (required), Password (required), and optional profile info (Gender, DateOfBirth, AddressLine1/2, PinCode, ParentName, ParentContact).
+CrimeReport: includes IncidentId (PK), Area, Region, CrimeType, Gender, CrimeDate, ReportedTime, Latitude, Longitude, Source (required), AgeOfVictim, and Messages.
+LocationLog: includes Id (PK), Username, Latitude (required), Longitude (required), Timestamp (auto UTC now), Message.
+DTOs (Data Transfer Objects): Used for API payloads (excluding or including only relevant fields). Examples: UserRegisterDTO (Username, Password), UserLoginDTO, UserProfileDTO (Id and profile fields), CrimeReportDTO (mirrors CrimeReport fields). AutoMapper (via AutoMapper.Extensions) maps between models and DTOs.
+Authentication & Logging: Uses JWT Bearer authentication (configured with secret key, issuer, audience in appsettings.json). Serilog is configured for logging to console and rolling file (packages Serilog.AspNetCore, Serilog.Sinks.Console, Serilog.Sinks.File).
+Environment Configuration:
+appsettings.json holds ConnectionStrings:DefaultConnection and a JwtSettings section (SecretKey, Issuer, Audience, ExpiryMinutes). You should update DefaultConnection to match your SQL Server instance (e.g. "Server=(localdb)\\MSSQLLocalDB;Database=Rakshak;Trusted_Connection=True;").
+The project targets .NET 7.0 (<TargetFramework>net7.0</TargetFramework> in .csproj).
+ML Service (Flask):
+The ML service is a Flask API
+github.com
+ written in Python that predicts a crime risk score. It loads a pre-trained model and supporting data files on startup and provides endpoints for the frontend to query.
+Endpoints:
+GET /: Returns a simple JSON or text message indicating the API is running (health check).
+POST /predict: Main endpoint. Expects JSON input with fields: latitude, longitude, gender, age. In the request handler, it:
+Parses and validates input.
+Encodes the gender value using gender_encoder.pkl.
+Creates a Pandas DataFrame with features: Latitude, Longitude, encoded gender, Age of Victim, and current hour.
+Uses the loaded risk_score_model.pkl (e.g. a scikit-learn regressor) to compute a score.
+Classifies the score into risk_level ("Low" if <50, "Moderate" if 50–75, "High" if ≥75).
+Determines the grid cell ID from grid_crime_lookup.pkl based on location (to link to historical crime data).
+Computes current day of week and retrieves the top 3 crime types for that grid (using grid_lookup data, which maps grid IDs to crime stats).
+Returns a JSON response like:
+json
+Copy
+Edit
+{
+  "score": 82.50,
+  "risk_level": "High",
+  "grid": 123,
+  "hour": 22,
+  "day": "Tuesday",
+  "top_3_crimes": ["Theft", "Assault", "Burglary"]
+}
+The service returns HTTP 200 with the JSON on success, or 400 with an error message on failure.
+
+Model & Data Files (in ML folder):
+
+risk_score_model.pkl: Serialized ML model (trained using historical crime data).
+gender_encoder.pkl: LabelEncoder for converting gender strings to numeric.
+grid_crime_lookup.pkl: A dictionary mapping grid (geohash or index) to a list of recent crimes (used for contextual info).
+crime dataset.csv, police_stations.csv: Source data used during training (not needed at runtime).
+train_model.py: Script used to train risk_score_model.pkl from the dataset.
+test_prediction.py: Script demonstrating how to call the Flask API for a sample.
+heatmap_api.py: (Optional) Another Flask app for generating crime heatmap data (not required to run the main system).
+Dependencies: The ML app requires Python (3.8+) and libraries: Flask, Flask-CORS, pandas, numpy, scikit-learn, joblib. These can be installed via pip. (E.g. pip install flask flask-cors pandas numpy scikit-learn joblib).
+Configuration: CORS is enabled (CORS(app)) to allow cross-origin requests from the frontend. The Flask app listens on http://127.0.0.1:5000 by default. Ensure this matches the URL used in MLPredictionController (127.0.0.1:5000).
+Frontend (my-safety-app)
+The frontend is a React.js single-page application
+opensource.fb.com
+ created with Create React App. It provides the user interface for both end-users and administrators. Key features include authentication forms, maps, and risk assessment tools.
+Technology Stack: Uses React for UI components, React Router DOM for page routing, and Bootstrap for styling. Leaflet (and plugins like leaflet.heat, leaflet.markercluster) handles interactive maps
+leafletjs.com
+. Axios or Fetch API calls the backend endpoints.
+Configuration:
+config.js sets the API_BASE_URL (default "https://localhost:7151"). This should match the backend URL.
+Authentication tokens are stored in localStorage after login, and secureFetch.js (or similar) attaches the JWT to API requests.
+Pages (src/pages/):
+Home: (landing page, description) – [can customize].
+Register: Form for new users (POST to /api/auth/register).
+Login: Form for existing users (POST to /api/auth/login), saves JWT.
+Profile: Displays and edits user profile (GET/PUT /api/users/{id}).
+RiskAnalysis: A form where user enters (or fetches) their current latitude, longitude, selects gender and age, and submits to /api/MLPrediction/predict. Displays returned risk score and details.
+MapTracking (or AdminMapView): Shows a Leaflet map. Fetches /api/LocationLogs (secured) to plot recent location log markers on the map. Allows admin to view user locations in real-time.
+AdminSOSLogs: (Admin only) Displays a list of SOS or location log entries.
+HeatMapView: Displays a crime heatmap (using Leaflet heatmap layer). (This may consume data from the ML’s crime dataset or a static file.)
+Components:
+Navbar: Top navigation linking to pages.
+Alerts/Modals: For notifications or errors.
+SecureFetch (utility): Wrapper to include the JWT auth header in requests.
+State & Variables: Uses React Hooks (useState, useEffect) for state management. Key state variables include form inputs (username, password, etc.), user data, logs list, map markers. Environment variables (e.g. process.env.REACT_APP_API_URL) may also be used.
+Key Features
+Authentication & Security: Users can register and login; passwords are (should be) hashed on the backend. JWT tokens are used for session management.
+User Profiles: Users have detailed profiles (gender, DOB, addresses, parent contact) that they can update.
+Location Tracking: Users (or a mobile client) can send periodic location logs. Administrators can view live locations on a map.
+Crime Reporting: Users or admins can submit crime incidents with details (type, location, etc.), which are stored in the database.
+Machine Learning Risk Prediction: The core ML model uses location, time, gender, and age to calculate a safety score. The system categorizes risk levels and provides contextual information (e.g. most common crimes in the area).
+Interactive Maps: The frontend features dynamic maps (Leaflet) showing user locations and crime heatmaps.
+Logging & Monitoring: Serilog in the backend records operations to logs. Swagger (Swashbuckle) is configured for API documentation.
+Scalability: Components are decoupled. The backend and ML service communicate over HTTP, allowing them to be deployed independently.
+Installation and Setup
+Pre-requisites: 64-bit OS (Windows 10+, or Linux/macOS), with internet access to download tools. A modern CPU (dual-core or better) and ≥4GB RAM is recommended. Disk space ~500MB for source code plus space for the database and Python packages.
+Extract Project Files: Unzip all three archives (RakshakAPI.zip, ML.zip, my-safety-app.zip) into a chosen directory. You should have three folders (e.g. RakshakAPI/, ML/, my-safety-app - Copy/).
+Backend Setup (RakshakAPI):
+Install .NET 7.0 SDK (or later) and an IDE (Visual Studio 2022+, Visual Studio Code, or JetBrains Rider).
+(Optional) Install SQL Server Express or ensure a SQL Server instance is available.
+Edit RakshakAPI/RakshakAPI/appsettings.json:
+Set ConnectionStrings:DefaultConnection to your database. For example:
+swift
+Copy
+Edit
+"DefaultConnection": "Server=(localdb)\\MSSQLLocalDB;Database=Rakshak;Trusted_Connection=True;TrustServerCertificate=True;"
+Under JwtSettings, you may change SecretKey to a secure random string (must match any change here when parsing tokens on frontend requests).
+Open a terminal in the RakshakAPI/RakshakAPI folder. Run dotnet restore then dotnet tool install --global dotnet-ef (if EF CLI not installed).
+Apply EF Core migrations: dotnet ef database update. This creates the Rakshak database and required tables.
+Run the API:
+In Visual Studio: Open the solution and press F5 (or run). The launch settings use HTTPS on port 7151 by default (https://localhost:7151).
+Or via CLI: dotnet run --project RakshakAPI/RakshakAPI.csproj.
+Verify backend is running by visiting https://localhost:7151/swagger in a browser (you should see the Swagger UI). If using HTTPS, you may need to trust the development certificate (Visual Studio usually handles this).
+ML Service Setup:
+Install Python 3.9+ (ensure python and pip in PATH).
+In a terminal, navigate to the ML/ML directory (where app.py is located).
+Install required Python packages:
+nginx
+Copy
+Edit
+pip install flask flask-cors pandas numpy scikit-learn joblib
+Ensure the files risk_score_model.pkl, gender_encoder.pkl, and grid_crime_lookup.pkl are present in this directory.
+Run the service: python app.py. It should start on http://127.0.0.1:5000.
+You can test the ML API by sending a GET to http://127.0.0.1:5000/ (should return a running message). The backend’s MLPredictionController will forward requests here.
+Frontend Setup:
+Install Node.js LTS (includes npm).
+In a terminal, go to my-safety-app - Copy folder.
+Install dependencies: npm install.
+Open src/config.js and ensure API_BASE_URL matches your backend URL. For example, use "https://localhost:7151" if the backend is on 7151 (HTTPS), or "http://localhost:5013" if using HTTP on port 5013.
+Start the React development server: npm start. This runs on http://localhost:3000.
+The frontend should open in a browser. Register a new user or login to begin using the app.
+
+Order and Commands to Run the Project
+To use the Rakshak software, follow this sequence:
+
+Compile and Run the Python Flask ML Backend
+
+Navigate to the ML/ML/ directory.
+
+Ensure Python is installed. Install the required packages using pip install -r requirements.txt (if a requirements file is present or install Flask manually with pip install flask).
+
+Compile is not required for Python, but to run the ML API, use the command:
+python risk_api.py
+
+This will start the ML API on: http://127.0.0.1:5000
+
+Compile and Run the .NET Core (C#) Backend API
+
+Open RakshakAPI/RakshakAPI/ folder in Visual Studio or run via CLI.
+
+To compile, use:
+dotnet build
+
+Then to run, use:
+dotnet run
+
+This starts the backend server, usually on https://localhost:7151
+
+Make sure the backend can access the ML API endpoint (http://127.0.0.1:5000) and your database is properly configured in appsettings.json.
+If database is not created yet, run:
+dotnet ef database update
+(Make sure EF tools are installed and your connection string is correct.)
+
+Compile and Run the React Frontend
+
+Go to the my-safety-app - Copy/ directory.
+
+Make sure Node.js and npm are installed.
+
+To install dependencies, run:
+npm install
+
+Then to start the frontend, run:
+npm start
+
+This opens the frontend in your default browser at: http://localhost:3000
+
+Software Requirements
+Python 3.7+
+
+.NET 6 SDK
+
+Node.js and npm (v14 or higher recommended)
+
+Visual Studio 2022+ (for backend C# API)
+
+Command Prompt or Terminal with Administrator privileges for trusted certificate and EF commands.
+
+Order of Execution:
+Start the Backend (RakshakAPI) so that API endpoints are available.
+Start the ML Service (Flask app), so the backend can successfully call it.
+Start the Frontend (React app) to use the application in the browser.
+Ensure that the backend (port 7151) and ML (port 5000) are running before using the frontend. CORS is enabled on the ML side for port 3000; if the browser blocks any requests between 3000↔7151, you may need to enable CORS or use a proxy in development.
+Software Requirements
+Operating System: Windows 10/11 (64-bit) or Linux/macOS (for .NET and Python).
+.NET SDK: .NET 7.0 SDK or later (download here
+learn.microsoft.com
+).
+IDE/Editor: Visual Studio 2022 (Community or later) or VS Code/Rider with C# support.
+Database: Microsoft SQL Server or SQL Server Express (or LocalDB).
+Python: Python 3.9+ (download here){ } (no citation needed).
+Node.js: Node.js LTS (with npm)
+nodejs.org
+ (download here).
+Frontend Libraries: React, Bootstrap, Leaflet (installed via npm).
+Backend Libraries: ASP.NET Core, Entity Framework Core, AutoMapper, Serilog, Swagger (NuGet packages).
+Python Libraries: Flask
+github.com
+, Flask-CORS, pandas, numpy, scikit-learn, joblib.
+Minimum hardware: A dual-core CPU and 4 GB RAM are sufficient for development/testing. More RAM is recommended for handling larger datasets in ML. A stable internet connection is needed to download dependencies.
+Public Domain Software and Libraries
+This project uses the following open-source tools and libraries (with download or information links):
+C# / .NET: ASP.NET Core (Microsoft’s web framework)
+learn.microsoft.com
+, Entity Framework Core (ORM), Serilog (logging).
+Python: Python (programming language)
+en.wikipedia.org
+, Flask (micro web framework)
+github.com
+, scikit-learn, pandas, NumPy, joblib (model persistence).
+JavaScript: Node.js
+nodejs.org
+ (runtime environment), React
+opensource.fb.com
+ (UI library), React Router, Axios.
+Mapping: Leaflet (JS maps library)
+leafletjs.com
+, Leaflet.heat (heatmaps), MarkerCluster.
+Styling: Bootstrap.
+Database: Microsoft SQL Server Express (or LocalDB).
+Development Tools: Visual Studio (Microsoft, free Community edition), VS Code, Git, etc.
+All these are open-source or freely available. They can be downloaded from their official websites (links above). No proprietary software is required to run the project.
+Acknowledgments
+Frameworks & Libraries: We gratefully use the work of many open-source projects: ASP.NET Core
+learn.microsoft.com
+, Flask
+github.com
+, React
+opensource.fb.com
+, Leaflet
+leafletjs.com
+, and others as listed above.
+Data: The ML model was trained on publicly available crime datasets (included in crime dataset.csv and police_stations.csv). Thanks to the data providers.
+Tutorials and Examples: Parts of this codebase (such as JWT setup, model serving) were inspired by online tutorials and documentation.
+Community: We thank the developers of all third-party libraries (NuGet, npm, pip packages) used in this project.
